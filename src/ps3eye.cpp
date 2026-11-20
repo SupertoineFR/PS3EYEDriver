@@ -2,6 +2,7 @@
 
 #include <thread>
 #include <mutex>
+#include <chrono>
 #include <condition_variable>
 #include <atomic>
 
@@ -479,12 +480,20 @@ public:
 		return new_frame;
 	}
 
-	void Dequeue(uint8_t* new_frame, int frame_width, int frame_height, PS3EYECam::EOutputFormat outputFormat)
+	bool Dequeue(uint8_t* new_frame, int frame_width, int frame_height, PS3EYECam::EOutputFormat outputFormat, bool wait)
 	{		
 		std::unique_lock<std::mutex> lock(mutex);
 
-		// If there is no data in the buffer, wait until data becomes available
-		empty_condition.wait(lock, [this] () { return available != 0; });
+		// If there is no data in the buffer, optionally wait (bounded) until data becomes available
+		if (wait)
+		{
+			if (!empty_condition.wait_for(lock, std::chrono::milliseconds(1000), [this] () { return available != 0; }))
+				return false;
+		}
+		else if (available == 0)
+		{
+			return false;
+		}
 
 		// Copy from internal buffer
 		uint8_t* source = frame_buffer + frame_size * tail;
@@ -502,6 +511,8 @@ public:
 		// Update tail and available count
 		tail = (tail + 1) % num_frames;
 		available--;
+
+		return true;
 	}
 
 	void Debayer(int frame_width, int frame_height, const uint8_t* inBayer, uint8_t* outBuffer, bool inBGR)
@@ -1109,9 +1120,9 @@ uint32_t PS3EYECam::getOutputBytesPerPixel() const
 	return 0;
 }
 
-void PS3EYECam::getFrame(uint8_t* frame)
+bool PS3EYECam::getFrame(uint8_t* frame, bool wait)
 {
-	urb->frame_queue->Dequeue(frame, frame_width, frame_height, frame_output_format);
+	return urb->frame_queue->Dequeue(frame, frame_width, frame_height, frame_output_format, wait);
 }
 
 bool PS3EYECam::open_usb()
